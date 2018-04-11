@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -118,12 +119,9 @@ func main() {
 	p := properties.MustLoadFile("${HOME}/.assume-role.properties", properties.UTF8)
 
 	mfaSercretProperty, ok := p.Get("mfa.secret")
-	inputNoSpaces := strings.Replace(mfaSercretProperty, " ", "", -1)
-	mfaSercret = strings.ToUpper(inputNoSpaces)
-
-	if !ok {
-		fmt.Printf("Please ensure you have mfa.secret property defined in ${HOME}/.assume-role.properties")
-		os.Exit(1)
+	if ok {
+		inputNoSpaces := strings.Replace(mfaSercretProperty, " ", "", -1)
+		mfaSercret = strings.ToUpper(inputNoSpaces)
 	}
 
 	durationProperty := p.GetInt("duration", 1)
@@ -242,10 +240,17 @@ func printPowerShellCredentials(role string, creds *credentials.Value) {
 // (https://docs.aws.amazon.com/cli/latest/userguide/cli-roles.html) and returns the temporary STS
 // credentials.
 func assumeProfile(profile string) (*credentials.Value, error) {
+	var tokenProviderFunc func() (string, error)
+	if mfaSercret != "" {
+		tokenProviderFunc = getTokenCode
+	} else {
+		tokenProviderFunc = readTokenCode
+	}
+
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		Profile:                 profile,
 		SharedConfigState:       session.SharedConfigEnable,
-		AssumeRoleTokenProvider: getTokenCode,
+		AssumeRoleTokenProvider: tokenProviderFunc,
 	}))
 
 	creds, err := sess.Config.Credentials.Get()
@@ -268,7 +273,13 @@ func assumeRole(role, mfa string, duration time.Duration) (*credentials.Value, e
 	}
 	if mfa != "" {
 		params.SerialNumber = aws.String(mfa)
-		token, err := getTokenCode()
+		var token string
+		var err error
+		if mfaSercret != "" {
+			token, err = getTokenCode()
+		} else {
+			token, err = readTokenCode()
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -277,7 +288,7 @@ func assumeRole(role, mfa string, duration time.Duration) (*credentials.Value, e
 
 	var resp *sts.AssumeRoleOutput
 	var err error
-	if mfa != "" {
+	if mfaSercret != "" {
 		for i := 0; i < 5; i++ {
 			resp, err = svc.AssumeRole(params)
 			if err == nil {
@@ -308,12 +319,23 @@ type roleConfig struct {
 
 type config map[string]roleConfig
 
-// getTokenCode reads the MFA token from Stdin.
+// getTokenCode generates new MFA token
 func getTokenCode() (string, error) {
 	key, err := base32.StdEncoding.DecodeString(mfaSercret)
 	epochSeconds := time.Now().Unix()
 	pwd := oneTimePassword(key, toBytes(epochSeconds/30))
 	return fmt.Sprint(pwd), err
+}
+
+// readTokenCode reads the MFA token from Stdin.
+func readTokenCode() (string, error) {
+	r := bufio.NewReader(os.Stdin)
+	fmt.Fprintf(os.Stderr, "MFA code: ")
+	text, err := r.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(text), nil
 }
 
 // loadConfig loads the ~/.aws/roles file.
