@@ -114,3 +114,24 @@ alias assume-role='function(){eval $(command assume-role $@);}'
 ```shell
 function assume-role { eval $( $(which assume-role) $@); }
 ```
+
+## Advanced usage
+
+### Configure auto session creation on new bash shell
+1. Add the following lines to `~/.bashrc` file:
+```
+eval-assume-role() {
+    eval $(assume-role $1)
+}
+
+read -p "Enter the AWS account for a new session: " arg1
+if [[ $arg1 != '' ]]; then
+    eval-assume-role $arg1
+fi
+```
+2. If you're a MacOs user make sure to include this line to `/etc/bashrc`:
+```
+if [ -f ~/.bashrc ]; then . ~/.bashrc; fi
+```
+3. Manual usage of `eval-assume-role`:
+`eval-assume-role <profile>`
