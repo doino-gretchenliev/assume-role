@@ -10,16 +10,16 @@ Download the appropriate latest released pre-build binary[`1.0.0`]:
 ## Configuration
 
 ### Main configuration file
-Location: `~/.assume-role.properties`
-Available properties:
-`mfa.secret`: MFA secret(optional;default: user prompt for MFA token;available options: [configure MFA token generator](CONFIGURE_MFA_TOKEN_GENERATOR.md)) 
-`duration`: duration of session in hours(optional;default: 1)
-`format`: the format of the output commands(optional;default: auto resolvable per OS;available options: powershell|bash|fish)
+* Location: `~/.assume-role.properties`
+* Available properties:
+    * `mfa.secret`: MFA secret(optional;default: user prompt for MFA token;available options: [configure MFA token generator](CONFIGURE_MFA_TOKEN_GENERATOR.md)) 
+    * `duration`: duration of session in hours(optional;default: 1)
+    * `format`: the format of the output commands(optional;default: auto resolvable per OS;available options: powershell|bash|fish)
 
 
 ### AWS profile configuration file
-Location: `~/.aws/config`
-Example:
+* Location: `~/.aws/config`
+* Example:
 
 `~/.aws/config`:
 
