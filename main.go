@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -13,18 +12,70 @@ import (
 	"syscall"
 	"time"
 
+
+
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/aws/credentials/stscreds"
 	"github.com/aws/aws-sdk-go/aws/session"
 	"github.com/aws/aws-sdk-go/service/sts"
 	"gopkg.in/yaml.v2"
+	"crypto/hmac"
+	"crypto/sha1"
+	"encoding/base32"
+	"github.com/magiconair/properties"
+	"strconv"
 )
 
 var (
 	configFilePath = fmt.Sprintf("%s/.aws/roles", os.Getenv("HOME"))
 	roleArnRe      = regexp.MustCompile(`^arn:aws:iam::(.+):role/([^/]+)(/.+)?$`)
+    mfaSercret     = ""
 )
+
+func toBytes(value int64) []byte {
+	var result []byte
+	mask := int64(0xFF)
+	shifts := [8]uint16{56, 48, 40, 32, 24, 16, 8, 0}
+	for _, shift := range shifts {
+		result = append(result, byte((value>>shift)&mask))
+	}
+	return result
+}
+
+func toUint32(bytes []byte) uint32 {
+	return (uint32(bytes[0]) << 24) + (uint32(bytes[1]) << 16) +
+		(uint32(bytes[2]) << 8) + uint32(bytes[3])
+}
+
+func oneTimePassword(key []byte, value []byte) uint32 {
+	// sign the value using HMAC-SHA1
+	hmacSha1 := hmac.New(sha1.New, key)
+	hmacSha1.Write(value)
+	hash := hmacSha1.Sum(nil)
+
+	// We're going to use a subset of the generated hash.
+	// Using the last nibble (half-byte) to choose the index to start from.
+	// This number is always appropriate as it's maximum decimal 15, the hash will
+	// have the maximum index 19 (20 bytes of SHA1) and we need 4 bytes.
+	offset := hash[len(hash)-1] & 0x0F
+
+	// get a 32-bit (4-byte) chunk from the hash starting at offset
+	hashParts := hash[offset : offset+4]
+
+	// ignore the most significant bit as per RFC 4226
+	hashParts[0] = hashParts[0] & 0x7F
+
+	number := toUint32(hashParts)
+
+	// size to 6 digits
+	// one million is the first number with 7 digits so the remainder
+	// of the division will always return < 7 digits
+	pwd := number % 1000000
+
+	return pwd
+}
+
 
 func usage() {
 	fmt.Fprintf(os.Stderr, "Usage: %s <role> [<command> <args...>]\n", os.Args[0])
@@ -52,11 +103,34 @@ func defaultFormat() string {
 	}
 }
 
+func ParseInt64(value string) int64 {
+	if len(value) == 0 {
+		return 0
+	}
+	parsed, err := strconv.Atoi(value[:len(value)-1])
+	if err != nil {
+		return 0
+	}
+	return int64(parsed)
+}
+
 func main() {
-	var (
-		duration = flag.Duration("duration", time.Hour, "The duration that the credentials will be valid for.")
-		format   = flag.String("format", defaultFormat(), "Format can be 'bash' or 'powershell'.")
-	)
+	p := properties.MustLoadFile("${HOME}/.assume-role.properties", properties.UTF8)
+
+	mfaSercretProperty, ok := p.Get("mfa.secret")
+	inputNoSpaces := strings.Replace(mfaSercretProperty, " ", "", -1)
+	mfaSercret = strings.ToUpper(inputNoSpaces)
+
+	if !ok {
+		fmt.Printf("Please ensure you have mfa.secret property defined in ${HOME}/.assume-role.properties")
+		os.Exit(1)
+	}
+
+	durationProperty := p.GetInt("duration", 1)
+	duration := time.Duration(durationProperty)  * time.Hour
+
+	format := p.GetString("format", defaultFormat())
+
 	flag.Parse()
 	argv := flag.Args()
 	if len(argv) < 1 {
@@ -64,7 +138,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	stscreds.DefaultDuration = *duration
+	stscreds.DefaultDuration = duration
 
 	role := argv[0]
 	args := argv[1:]
@@ -73,7 +147,7 @@ func main() {
 	var creds *credentials.Value
 	var err error
 	if roleArnRe.MatchString(role) {
-		creds, err = assumeRole(role, "", *duration)
+		creds, err = assumeRole(role, "", duration)
 	} else if _, err = os.Stat(configFilePath); err == nil {
 		fmt.Fprintf(os.Stderr, "WARNING: using deprecated role file (%s), switch to config file"+
 			" (https://docs.aws.amazon.com/cli/latest/userguide/cli-roles.html)\n",
@@ -86,7 +160,7 @@ func main() {
 			must(fmt.Errorf("%s not in %s", role, configFilePath))
 		}
 
-		creds, err = assumeRole(roleConfig.Role, roleConfig.MFA, *duration)
+		creds, err = assumeRole(roleConfig.Role, roleConfig.MFA, duration)
 	} else {
 		creds, err = assumeProfile(role)
 	}
@@ -94,7 +168,7 @@ func main() {
 	must(err)
 
 	if len(args) == 0 {
-		switch *format {
+		switch format {
 		case "powershell":
 			printPowerShellCredentials(role, creds)
 		case "bash":
@@ -171,7 +245,7 @@ func assumeProfile(profile string) (*credentials.Value, error) {
 	sess := session.Must(session.NewSessionWithOptions(session.Options{
 		Profile:                 profile,
 		SharedConfigState:       session.SharedConfigEnable,
-		AssumeRoleTokenProvider: readTokenCode,
+		AssumeRoleTokenProvider: getTokenCode,
 	}))
 
 	creds, err := sess.Config.Credentials.Get()
@@ -194,14 +268,26 @@ func assumeRole(role, mfa string, duration time.Duration) (*credentials.Value, e
 	}
 	if mfa != "" {
 		params.SerialNumber = aws.String(mfa)
-		token, err := readTokenCode()
+		token, err := getTokenCode()
 		if err != nil {
 			return nil, err
 		}
 		params.TokenCode = aws.String(token)
 	}
 
-	resp, err := svc.AssumeRole(params)
+	var resp *sts.AssumeRoleOutput
+	var err error
+	if mfa != "" {
+		for i := 0; i < 5; i++ {
+			resp, err = svc.AssumeRole(params)
+			if err == nil {
+				break
+			}
+			time.Sleep(2 * time.Second)
+		}
+	} else {
+		resp, err = svc.AssumeRole(params)
+	}
 
 	if err != nil {
 		return nil, err
@@ -222,15 +308,12 @@ type roleConfig struct {
 
 type config map[string]roleConfig
 
-// readTokenCode reads the MFA token from Stdin.
-func readTokenCode() (string, error) {
-	r := bufio.NewReader(os.Stdin)
-	fmt.Fprintf(os.Stderr, "MFA code: ")
-	text, err := r.ReadString('\n')
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(text), nil
+// getTokenCode reads the MFA token from Stdin.
+func getTokenCode() (string, error) {
+	key, err := base32.StdEncoding.DecodeString(mfaSercret)
+	epochSeconds := time.Now().Unix()
+	pwd := oneTimePassword(key, toBytes(epochSeconds/30))
+	return fmt.Sprint(pwd), err
 }
 
 // loadConfig loads the ~/.aws/roles file.
