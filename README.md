@@ -2,30 +2,24 @@ This tool will request and set temporary credentials in your shell environment v
 
 ## Installation
 
-On OS X, the best way to get it is to use homebrew:
-
-```bash
-brew install remind101/formulae/assume-role
-```
-
-If you have a working Go 1.6/1.7 environment:
-
-```bash
-$ go get -u github.com/remind101/assume-role
-```
-
-On Windows with PowerShell, you can use [scoop.sh](http://scoop.sh/)
-
-```cmd
-$ scoop bucket add extras
-$ scoop install assume-role
-```
+Download the appropriate latest released pre-build binary[`1.0.0`]:
+* [MacOS](https://github.com/doino-gretchenliev/assume-role/releases/download/1.0.0/assume-role-Darwin)
+* [Linux](https://github.com/doino-gretchenliev/assume-role/releases/download/1.0.0/assume-role-Linux)
+* [Windows](https://github.com/doino-gretchenliev/assume-role/releases/download/1.0.0/assume-role-Windows.exe)
 
 ## Configuration
 
-Setup a profile for each role you would like to assume in `~/.aws/config`.
+### Main configuration file
+Location: `~/.assume-role.properties`
+Available properties:
+`mfa.secret`: MFA secret(optional;default: user prompt for MFA token;available options: [configure MFA token generator](CONFIGURE_MFA_TOKEN_GENERATOR.md)) 
+`duration`: duration of session in hours(optional;default: 1)
+`format`: the format of the output commands(optional;default: auto resolvable per OS;available options: powershell|bash|fish)
 
-For example:
+
+### AWS profile configuration file
+Location: `~/.aws/config`
+Example:
 
 `~/.aws/config`:
 
@@ -79,7 +73,7 @@ $ assume-role stage aws iam get-user
 
 The `assume-role` tool sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` environment variables and then executes the command provided.
 
-If the role requires MFA, you will be asked for the token first:
+If the role requires MFA, you will be asked for the token first or you can [configure MFA secret](CONFIGURE_MFA_TOKEN_GENERATOR.md) and use auto token generation logic:
 
 ```bash
 $ assume-role prod aws iam get-user
@@ -120,7 +114,3 @@ alias assume-role='function(){eval $(command assume-role $@);}'
 ```shell
 function assume-role { eval $( $(which assume-role) $@); }
 ```
-
-## TODO
-
-* [ ] Cache credentials.

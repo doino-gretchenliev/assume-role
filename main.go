@@ -126,10 +126,23 @@ func main() {
 
 	durationProperty := p.GetInt("duration", 1)
 	duration := time.Duration(durationProperty)  * time.Hour
-
 	format := p.GetString("format", defaultFormat())
 
+	generateTokenFlag := flag.Bool("generate-token", false, "Generate one time MFA token and exits")
 	flag.Parse()
+
+	if *generateTokenFlag {
+		token, err := getTokenCode()
+		if err != nil {
+			fmt.Printf("Error occured during MFA token generation", err)
+			os.Exit(1)
+		}
+		epochSeconds := time.Now().Unix()
+		secondsRemaining := 30 - (epochSeconds % 30)
+		fmt.Printf("Token: %s (~%d second(s) remaining)\n", token, secondsRemaining)
+		os.Exit(0)
+	}
+
 	argv := flag.Args()
 	if len(argv) < 1 {
 		flag.Usage()
