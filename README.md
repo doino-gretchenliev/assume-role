@@ -121,6 +121,12 @@ function assume-role { eval $( $(which assume-role) $@); }
 1. Add the following lines to `~/.bashrc` file:
 ```
 eval-assume-role() {
+    unset \
+    ASSUMED_ROLE \
+    AWS_ACCESS_KEY_ID \
+    AWS_SECRET_ACCESS_KEY \
+    AWS_SECURITY_TOKEN \
+    AWS_SESSION_TOKEN
     eval $(assume-role $1)
 }
 
